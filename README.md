@@ -8,6 +8,10 @@ every JSONL record, and gives you a sortable timeline, a free-text query box, a
 protocol filter, a full request/response detail pane (never truncated), and a
 timeline histogram.
 
+![oob-tui showing the newest-first interaction list with a blind-XSS exfil request selected and its full request/response in the detail pane](docs/screenshot.png)
+
+<sub>Screenshot uses the bundled sample data (fake hosts/IPs) — see [Demo / screenshot](#demo--screenshot).</sub>
+
 ## Demo / screenshot
 
 A self-contained sample (no real hosts — `oob.example.com` + reserved
