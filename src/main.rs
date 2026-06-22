@@ -5,8 +5,13 @@
 //!   interactsh-tui                 # fetch from the configured host over ssh (gzip)
 //!   interactsh-tui --host myalias  # override the ssh host alias
 //!   interactsh-tui --config p.toml # use a specific config file
-//!   interactsh-tui --file log.jsonl  # read a local jsonl file instead of ssh
+//!   interactsh-tui --file log.jsonl  # read a local jsonl file (e.g. on the server)
 //!   interactsh-tui --cached        # use the last cached fetch, no ssh
+//!   interactsh-tui --refresh 5     # override the auto-refresh interval (seconds)
+//!
+//! Refresh adapts to the source: a `--file` (local) source re-reads the file, an
+//! ssh source re-pulls. So running it on the server itself with `--file` gives a
+//! live local tail with no ssh.
 
 mod app;
 mod config;
@@ -36,6 +41,7 @@ struct Args {
     file: Option<PathBuf>,
     cached: bool,
     config: Option<PathBuf>,
+    refresh: Option<u64>,
 }
 
 fn parse_args() -> Result<Args> {
@@ -43,6 +49,7 @@ fn parse_args() -> Result<Args> {
     let mut file = None;
     let mut cached = false;
     let mut config = None;
+    let mut refresh = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -50,6 +57,10 @@ fn parse_args() -> Result<Args> {
             "--file" => file = Some(PathBuf::from(it.next().context("--file needs a value")?)),
             "--config" => config = Some(PathBuf::from(it.next().context("--config needs a value")?)),
             "--cached" => cached = true,
+            "--refresh" => {
+                let v = it.next().context("--refresh needs a value (seconds, 0 to disable)")?;
+                refresh = Some(v.parse().with_context(|| format!("invalid --refresh value: {v}"))?);
+            }
             "-h" | "--help" => {
                 println!(
                     "interactsh-tui — interactsh OOB interaction browser\n\n\
@@ -58,6 +69,7 @@ fn parse_args() -> Result<Args> {
                      --config <path>  use a specific config file\n\
                      --file <path>    read a local jsonl file instead of ssh\n\
                      --cached         reuse the last fetch (no ssh)\n\
+                     --refresh <secs> auto-refresh interval; 0 disables (overrides config)\n\
                      -h, --help       this help"
                 );
                 std::process::exit(0);
@@ -65,7 +77,7 @@ fn parse_args() -> Result<Args> {
             other => bail!("unknown argument: {other}"),
         }
     }
-    Ok(Args { host, file, cached, config })
+    Ok(Args { host, file, cached, config, refresh })
 }
 
 fn cache_path() -> PathBuf {
@@ -105,51 +117,88 @@ fn fetch_from_server(host: &str, remote_log: &str) -> Result<String> {
     Ok(s)
 }
 
-fn load_data(args: &Args, host: &str, remote_log: &str) -> Result<String> {
-    if let Some(f) = &args.file {
-        return std::fs::read_to_string(f).with_context(|| format!("reading {}", f.display()));
+/// Where interactions come from, and how a refresh re-fetches them. Cloned into
+/// each background fetch thread so the same logic serves the initial load,
+/// auto-refresh, and the `r` key.
+#[derive(Clone)]
+enum Source {
+    /// A local jsonl file (e.g. running on the server itself). Refresh re-reads it.
+    Local(PathBuf),
+    /// A remote interactsh host pulled over ssh + gzip. Refresh re-runs the fetch.
+    Ssh { host: String, remote_log: String },
+}
+
+impl Source {
+    fn fetch(&self) -> Result<String> {
+        match self {
+            Source::Local(p) => {
+                std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))
+            }
+            Source::Ssh { host, remote_log } => fetch_from_server(host, remote_log),
+        }
     }
-    if args.cached {
-        let p = cache_path();
-        return std::fs::read_to_string(&p)
-            .with_context(|| format!("no cache at {} (run once without --cached)", p.display()));
+
+    /// Short label for the header/status line.
+    fn label(&self) -> String {
+        match self {
+            Source::Local(p) => p
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.display().to_string()),
+            Source::Ssh { host, .. } if host.trim().is_empty() => "(no host)".into(),
+            Source::Ssh { host, .. } => host.clone(),
+        }
     }
-    fetch_from_server(host, remote_log)
+
+    fn is_local(&self) -> bool {
+        matches!(self, Source::Local(_))
+    }
 }
 
 fn main() -> Result<()> {
     let args = parse_args()?;
     let (cfg, cfg_path) = Config::load(args.config.as_deref())?;
-    // CLI --host overrides the configured host.
-    let host = args.host.clone().unwrap_or_else(|| cfg.host.clone());
+
+    // Decide where data comes from. --file (and --cached) read a local file and
+    // refresh by re-reading it; otherwise we pull from the configured ssh host.
+    let source = if let Some(f) = &args.file {
+        Source::Local(f.clone())
+    } else if args.cached {
+        let p = cache_path();
+        if !p.is_file() {
+            bail!("no cache at {} — run once without --cached first", p.display());
+        }
+        Source::Local(p)
+    } else {
+        // CLI --host overrides the configured host.
+        let host = args.host.clone().unwrap_or_else(|| cfg.host.clone());
+        Source::Ssh { host, remote_log: cfg.remote_log.clone() }
+    };
+
+    // Refresh interval precedence: --refresh > config (default 60). A static
+    // --cached snapshot defaults to off. A local --file source re-reads cheaply,
+    // so it gets the same default as ssh — refresh "just works" on the server.
+    let refresh_secs = match args.refresh {
+        Some(n) => n,
+        None if args.cached => 0,
+        None => cfg.refresh_secs,
+    };
 
     if let Some(p) = &cfg_path {
         eprintln!("config: {}", p.display());
-    } else if args.file.is_none() && !args.cached {
+    } else if matches!(source, Source::Ssh { .. }) {
         eprintln!("config: none found — using defaults (see config.example.toml)");
     }
     eprintln!("loading interactions…");
-    let data = load_data(&args, &host, &cfg.remote_log)?;
+    let data = source.fetch()?;
     let interactions = model::parse_all(&data);
     if interactions.is_empty() {
         eprintln!("warning: no interactions parsed");
     }
 
-    // Auto-refresh pulls over ssh, so disable it in the explicitly-offline modes.
-    let refresh_secs = if args.file.is_some() || args.cached {
-        0
-    } else {
-        cfg.refresh_secs
-    };
-    let mut app = App::new(
-        host,
-        cfg.remote_log.clone(),
-        cfg.editor.clone(),
-        refresh_secs,
-        interactions,
-    );
+    let mut app = App::new(source.label(), cfg.editor.clone(), refresh_secs, interactions);
     let mut terminal = ratatui::init();
-    let res = run(&mut terminal, &mut app);
+    let res = run(&mut terminal, &mut app, source);
     ratatui::restore();
     res
 }
@@ -157,27 +206,25 @@ fn main() -> Result<()> {
 /// Type sent from a background fetch thread to the UI loop: Ok(jsonl) or Err(msg).
 type FetchResult = std::result::Result<String, String>;
 
-/// Spawn a background ssh fetch; the result arrives on `tx` so the UI never blocks.
-fn spawn_fetch(tx: &mpsc::Sender<FetchResult>, host: &str, remote_log: &str) {
+/// Spawn a background fetch from `source`; the result arrives on `tx` so the UI
+/// never blocks (an ssh pull or a large local read both happen off the UI thread).
+fn spawn_fetch(tx: &mpsc::Sender<FetchResult>, source: &Source) {
     let tx = tx.clone();
-    let host = host.to_string();
-    let remote_log = remote_log.to_string();
+    let source = source.clone();
     thread::spawn(move || {
-        let _ = tx.send(fetch_from_server(&host, &remote_log).map_err(|e| format!("{e:#}")));
+        let _ = tx.send(source.fetch().map_err(|e| format!("{e:#}")));
     });
 }
 
-fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
+fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App, source: Source) -> Result<()> {
     // Auto-clear a transient status message after a moment.
     let mut status_set: Option<Instant> = None;
     let mut dirty = true; // redraw only when state changed, not on a fixed clock
 
     // Background-refresh plumbing. `fetching` guards against overlapping fetches;
     // `last_fetch` paces the auto interval (and is reset on completion/failure so a
-    // failed fetch waits a full interval instead of hammering the server).
+    // failed fetch waits a full interval instead of hammering the source).
     let (tx, rx) = mpsc::channel::<FetchResult>();
-    let host = app.host.clone();
-    let remote_log = app.remote_log.clone();
     let auto = Duration::from_secs(app.refresh_secs);
     let mut last_fetch = Instant::now();
     let mut fetching = false;
@@ -190,7 +237,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
 
         // Kick off an auto-refresh when the interval has elapsed.
         if app.refresh_secs > 0 && !fetching && last_fetch.elapsed() >= auto {
-            spawn_fetch(&tx, &host, &remote_log);
+            spawn_fetch(&tx, &source);
             fetching = true;
             app.status = "auto-refreshing…".into();
             status_set = Some(Instant::now());
@@ -301,9 +348,13 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
             KeyCode::Char('K') | KeyCode::PageUp => app.scroll_detail(-5),
             KeyCode::Char('r') => {
                 if !fetching {
-                    spawn_fetch(&tx, &host, &remote_log);
+                    spawn_fetch(&tx, &source);
                     fetching = true;
-                    app.status = format!("refreshing from {}…", app.host);
+                    app.status = if source.is_local() {
+                        format!("re-reading {}…", app.source)
+                    } else {
+                        format!("refreshing from {}…", app.source)
+                    };
                     status_set = Some(Instant::now());
                 }
             }

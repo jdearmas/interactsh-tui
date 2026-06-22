@@ -43,10 +43,21 @@ interactsh-tui --host myalias  # override the configured ssh host
 interactsh-tui --config p.toml # use a specific config file
 interactsh-tui --file log.jsonl  # read a local jsonl file instead of ssh
 interactsh-tui --cached        # reuse the last fetch (~/.cache/interactsh-tui/), no ssh
+interactsh-tui --refresh 5     # override the auto-refresh interval (seconds; 0 disables)
 ```
 
 The first network fetch is cached to `~/.cache/interactsh-tui/interactions.jsonl`, so
 `--cached` works offline.
+
+### Running on the interactsh server itself
+
+Point it straight at the local log — no ssh needed, and auto-refresh re-reads the
+file in place, giving you a live local tail:
+
+```
+interactsh-tui --file /var/log/interactsh/interactions.jsonl          # live, refresh every 60s
+interactsh-tui --file /var/log/interactsh/interactions.jsonl --refresh 5
+```
 
 ## Keys
 
@@ -97,12 +108,15 @@ see when they hit).
 
 ## Auto-refresh
 
-By default the list re-fetches from the server every 60 seconds (`refresh_secs`),
-so it works as a live monitor. The fetch runs on a background thread — the UI never
-blocks — and your place is preserved: if you're at the top you stay pinned to the
-newest interaction as new ones arrive; if you've scrolled into history, your
-selection stays on the same interaction. The header shows `auto:60s` (or `auto:off`).
-Press `r` to refresh immediately; set `refresh_secs = 0` to disable.
+By default the list refreshes every 60 seconds (`refresh_secs`), so it works as a
+live monitor. Refresh adapts to the source: an ssh source re-pulls the log, while a
+local `--file` source re-reads the file in place — so it works the same whether
+you run it from your laptop or on the server itself. The fetch runs on a background
+thread — the UI never blocks — and your place is preserved: if you're at the top you
+stay pinned to the newest interaction as new ones arrive; if you've scrolled into
+history, your selection stays on the same interaction. The header shows `auto:60s`
+(or `auto:off`). Press `r` to refresh immediately; set `refresh_secs = 0` (or
+`--refresh 0`) to disable, or `--refresh <secs>` to override the interval.
 
 ## License
 

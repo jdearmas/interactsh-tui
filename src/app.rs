@@ -81,8 +81,8 @@ impl Group {
 }
 
 pub struct App {
-    pub host: String,
-    pub remote_log: String,
+    /// Short label for the data source (ssh host or local file name), shown in the header.
+    pub source: String,
     /// Configured editor override; `None` falls back to $EDITOR then `nvim`.
     pub editor: Option<String>,
     /// Auto-refresh interval in seconds (0 = disabled). Driven by the run loop.
@@ -106,15 +106,13 @@ pub struct App {
 
 impl App {
     pub fn new(
-        host: String,
-        remote_log: String,
+        source: String,
         editor: Option<String>,
         refresh_secs: u64,
         all: Vec<Interaction>,
     ) -> Self {
         let mut app = App {
-            host,
-            remote_log,
+            source,
             editor,
             refresh_secs,
             all,
@@ -347,7 +345,7 @@ mod tests {
     }
 
     fn app_from(lines: &[String]) -> App {
-        App::new("h".into(), "/x".into(), None, 0, parse_all(&lines.join("\n")))
+        App::new("test".into(), None, 0, parse_all(&lines.join("\n")))
     }
 
     #[test]

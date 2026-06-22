@@ -53,7 +53,7 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
     };
     let spans = vec![
         Span::styled(" interactsh-tui ", Style::default().bg(ACCENT).fg(Color::Black).add_modifier(Modifier::BOLD)),
-        Span::raw(format!(" {} ", app.host)),
+        Span::raw(format!(" {} ", app.source)),
         Span::styled("│", Style::default().fg(DIM)),
         Span::raw(shown),
         Span::styled("│", Style::default().fg(DIM)),
