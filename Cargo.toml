@@ -1,5 +1,5 @@
 [package]
-name = "oob-tui"
+name = "interactsh-tui"
 version = "0.1.0"
 edition = "2021"
 description = "TUI to browse, query, and timeline interactsh OOB-server interactions"

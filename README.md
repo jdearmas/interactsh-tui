@@ -1,4 +1,4 @@
-# oob-tui
+# interactsh-tui
 
 A terminal UI to **browse, query, and timeline** every interaction logged by the
 interactsh OOB server (`/var/log/interactsh/interactions.jsonl` on `oob`).
@@ -8,7 +8,7 @@ every JSONL record, and gives you a sortable timeline, a free-text query box, a
 protocol filter, a full request/response detail pane (never truncated), and a
 timeline histogram.
 
-![oob-tui showing the newest-first interaction list with a blind-XSS exfil request selected and its full request/response in the detail pane](docs/screenshot.png)
+![interactsh-tui showing the newest-first interaction list with a blind-XSS exfil request selected and its full request/response in the detail pane](docs/screenshot.png)
 
 <sub>Screenshot uses the bundled sample data (fake hosts/IPs).</sub>
 
@@ -33,19 +33,19 @@ $EDITOR config.toml                     # set host = "your-ssh-alias"
 | `refresh_secs` | `60` | auto-refresh interval in seconds; `0` disables (refresh on demand with `r`) |
 
 Lookup order (first found wins): `--config <path>` → `./config.toml` →
-`~/.config/oob-tui/config.toml` → built-in defaults. CLI flags override the file.
+`~/.config/interactsh-tui/config.toml` → built-in defaults. CLI flags override the file.
 
 ## Run
 
 ```
-oob-tui                 # read config.toml, ssh-fetch + decompress the log, open the TUI
-oob-tui --host myalias  # override the configured ssh host
-oob-tui --config p.toml # use a specific config file
-oob-tui --file log.jsonl  # read a local jsonl file instead of ssh
-oob-tui --cached        # reuse the last fetch (~/.cache/oob-tui/), no ssh
+interactsh-tui                 # read config.toml, ssh-fetch + decompress the log, open the TUI
+interactsh-tui --host myalias  # override the configured ssh host
+interactsh-tui --config p.toml # use a specific config file
+interactsh-tui --file log.jsonl  # read a local jsonl file instead of ssh
+interactsh-tui --cached        # reuse the last fetch (~/.cache/interactsh-tui/), no ssh
 ```
 
-The first network fetch is cached to `~/.cache/oob-tui/interactions.jsonl`, so
+The first network fetch is cached to `~/.cache/interactsh-tui/interactions.jsonl`, so
 `--cached` works offline.
 
 ## Keys

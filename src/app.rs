@@ -286,7 +286,7 @@ impl App {
         let g = self.selected_group()?;
         let rep = g.rep(&self.all);
         let mut out = String::new();
-        out.push_str("# oob-tui interaction export\n\n");
+        out.push_str("# interactsh-tui interaction export\n\n");
         out.push_str(&format!("protocol : {}\n", rep.protocol.to_uppercase()));
         if let Some(q) = &rep.qtype {
             if !q.is_empty() {

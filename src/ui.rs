@@ -52,7 +52,7 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(" group:off ", Style::default().fg(DIM))
     };
     let spans = vec![
-        Span::styled(" oob-tui ", Style::default().bg(ACCENT).fg(Color::Black).add_modifier(Modifier::BOLD)),
+        Span::styled(" interactsh-tui ", Style::default().bg(ACCENT).fg(Color::Black).add_modifier(Modifier::BOLD)),
         Span::raw(format!(" {} ", app.host)),
         Span::styled("│", Style::default().fg(DIM)),
         Span::raw(shown),
@@ -366,7 +366,7 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_help(f: &mut Frame, area: Rect) {
     let text = vec![
-        Line::styled("  oob-tui — keys", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        Line::styled("  interactsh-tui — keys", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
         Line::from(""),
         Line::raw("  ↑/↓  j/k   move selection"),
         Line::raw("  g / G       newest / oldest"),

@@ -3,7 +3,7 @@
 //!
 //! Lookup order when `--config` is not given (first existing file wins):
 //!   1. ./config.toml                       (repo-local, gitignored — your settings)
-//!   2. $HOME/.config/oob-tui/config.toml   (standard per-user location)
+//!   2. $HOME/.config/interactsh-tui/config.toml   (standard per-user location)
 //! A missing file is fine — built-in defaults apply. CLI flags override the config.
 
 use std::path::{Path, PathBuf};
@@ -57,7 +57,7 @@ impl Config {
     fn default_paths() -> Vec<PathBuf> {
         let mut v = vec![PathBuf::from("config.toml")];
         if let Ok(home) = std::env::var("HOME") {
-            v.push(PathBuf::from(home).join(".config/oob-tui/config.toml"));
+            v.push(PathBuf::from(home).join(".config/interactsh-tui/config.toml"));
         }
         v
     }

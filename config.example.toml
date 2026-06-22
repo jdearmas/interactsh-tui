@@ -1,4 +1,4 @@
-# oob-tui configuration — copy this file to `config.toml` and edit it.
+# interactsh-tui configuration — copy this file to `config.toml` and edit it.
 #
 #   cp config.example.toml config.toml
 #
@@ -21,7 +21,7 @@ host = "my-oob"
 # usual location; change it only if you log somewhere else.
 remote_log = "/var/log/interactsh/interactions.jsonl"
 
-# Optional: editor opened by the `e` key. When unset, oob-tui uses $EDITOR and
+# Optional: editor opened by the `e` key. When unset, interactsh-tui uses $EDITOR and
 # then falls back to `nvim`. May include arguments, e.g. "code -w".
 # editor = "nvim"
 

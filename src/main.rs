@@ -1,12 +1,12 @@
-//! oob-tui — browse, query, and timeline interactsh OOB-server interactions.
+//! interactsh-tui — browse, query, and timeline interactsh OOB-server interactions.
 //!
 //! Connection settings (ssh host, remote log path, editor) live in a config file
 //! — see `config.example.toml`. CLI flags override the config:
-//!   oob-tui                 # fetch from the configured host over ssh (gzip)
-//!   oob-tui --host myalias  # override the ssh host alias
-//!   oob-tui --config p.toml # use a specific config file
-//!   oob-tui --file log.jsonl  # read a local jsonl file instead of ssh
-//!   oob-tui --cached        # use the last cached fetch, no ssh
+//!   interactsh-tui                 # fetch from the configured host over ssh (gzip)
+//!   interactsh-tui --host myalias  # override the ssh host alias
+//!   interactsh-tui --config p.toml # use a specific config file
+//!   interactsh-tui --file log.jsonl  # read a local jsonl file instead of ssh
+//!   interactsh-tui --cached        # use the last cached fetch, no ssh
 
 mod app;
 mod config;
@@ -52,7 +52,7 @@ fn parse_args() -> Result<Args> {
             "--cached" => cached = true,
             "-h" | "--help" => {
                 println!(
-                    "oob-tui — interactsh OOB interaction browser\n\n\
+                    "interactsh-tui — interactsh OOB interaction browser\n\n\
                      Settings come from config.toml (see config.example.toml).\n\n\
                      --host <alias>   ssh host alias (overrides config)\n\
                      --config <path>  use a specific config file\n\
@@ -70,7 +70,7 @@ fn parse_args() -> Result<Args> {
 
 fn cache_path() -> PathBuf {
     let base = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(base).join(".cache/oob-tui/interactions.jsonl")
+    PathBuf::from(base).join(".cache/interactsh-tui/interactions.jsonl")
 }
 
 /// Pull the log from the server over ssh, decompressing the gzip stream.

@@ -5,7 +5,7 @@ and all sources are in the reserved TEST-NET-1/2/3 documentation ranges.
 
     python3 examples/gen-sample-data.py > examples/sample-interactions.jsonl
 
-Output is one JSON object per line, matching the schema oob-tui parses
+Output is one JSON object per line, matching the schema interactsh-tui parses
 (protocol, full-id, raw-request, raw-response, remote-address, timestamp, q-type).
 """
 import datetime
@@ -249,7 +249,7 @@ http(
 )
 dns(90000, "1.0.0.1", "NS", seed="old-ns")
 
-# emit sorted oldest->newest (oob-tui re-sorts anyway)
+# emit sorted oldest->newest (interactsh-tui re-sorts anyway)
 records.sort(key=lambda r: r["timestamp"])
 out = sys.stdout
 for r in records:
