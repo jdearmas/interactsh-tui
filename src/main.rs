@@ -16,6 +16,8 @@ mod ui;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
@@ -26,7 +28,7 @@ use ratatui::crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 
-use app::{App, Mode, View};
+use app::{App, Mode};
 use config::Config;
 
 struct Args {
@@ -133,24 +135,89 @@ fn main() -> Result<()> {
         eprintln!("warning: no interactions parsed");
     }
 
-    let mut app = App::new(host, cfg.remote_log.clone(), cfg.editor.clone(), interactions);
+    // Auto-refresh pulls over ssh, so disable it in the explicitly-offline modes.
+    let refresh_secs = if args.file.is_some() || args.cached {
+        0
+    } else {
+        cfg.refresh_secs
+    };
+    let mut app = App::new(
+        host,
+        cfg.remote_log.clone(),
+        cfg.editor.clone(),
+        refresh_secs,
+        interactions,
+    );
     let mut terminal = ratatui::init();
     let res = run(&mut terminal, &mut app);
     ratatui::restore();
     res
 }
 
+/// Type sent from a background fetch thread to the UI loop: Ok(jsonl) or Err(msg).
+type FetchResult = std::result::Result<String, String>;
+
+/// Spawn a background ssh fetch; the result arrives on `tx` so the UI never blocks.
+fn spawn_fetch(tx: &mpsc::Sender<FetchResult>, host: &str, remote_log: &str) {
+    let tx = tx.clone();
+    let host = host.to_string();
+    let remote_log = remote_log.to_string();
+    thread::spawn(move || {
+        let _ = tx.send(fetch_from_server(&host, &remote_log).map_err(|e| format!("{e:#}")));
+    });
+}
+
 fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
     // Auto-clear a transient status message after a moment.
     let mut status_set: Option<Instant> = None;
     let mut dirty = true; // redraw only when state changed, not on a fixed clock
+
+    // Background-refresh plumbing. `fetching` guards against overlapping fetches;
+    // `last_fetch` paces the auto interval (and is reset on completion/failure so a
+    // failed fetch waits a full interval instead of hammering the server).
+    let (tx, rx) = mpsc::channel::<FetchResult>();
+    let host = app.host.clone();
+    let remote_log = app.remote_log.clone();
+    let auto = Duration::from_secs(app.refresh_secs);
+    let mut last_fetch = Instant::now();
+    let mut fetching = false;
+
     loop {
         if dirty {
             terminal.draw(|f| ui::render(f, app))?;
             dirty = false;
         }
 
-        // Wake periodically only so the transient status line can self-clear.
+        // Kick off an auto-refresh when the interval has elapsed.
+        if app.refresh_secs > 0 && !fetching && last_fetch.elapsed() >= auto {
+            spawn_fetch(&tx, &host, &remote_log);
+            fetching = true;
+            app.status = "auto-refreshing…".into();
+            status_set = Some(Instant::now());
+            dirty = true;
+        }
+
+        // Apply a completed fetch (from either an auto-refresh or the `r` key).
+        match rx.try_recv() {
+            Ok(Ok(data)) => {
+                let n = app.reload(&data);
+                fetching = false;
+                last_fetch = Instant::now();
+                app.status = format!("updated — {n} interactions");
+                status_set = Some(Instant::now());
+                dirty = true;
+            }
+            Ok(Err(e)) => {
+                fetching = false;
+                last_fetch = Instant::now();
+                app.status = format!("refresh failed: {e}");
+                status_set = Some(Instant::now());
+                dirty = true;
+            }
+            Err(_) => {} // nothing ready
+        }
+
+        // Wake periodically so background results land and the status line clears.
         if !event::poll(Duration::from_millis(250))? {
             if let Some(t) = status_set {
                 if t.elapsed() > Duration::from_secs(4) {
@@ -190,7 +257,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                 KeyCode::Enter => {
                     app.mode = Mode::Normal;
                     app.recompute();
-                    app.select_last();
+                    app.select_first(); // jump to the newest match (top)
                 }
                 KeyCode::Backspace => {
                     app.query.pop();
@@ -233,8 +300,12 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
             KeyCode::Char('J') | KeyCode::PageDown => app.scroll_detail(5),
             KeyCode::Char('K') | KeyCode::PageUp => app.scroll_detail(-5),
             KeyCode::Char('r') => {
-                refresh(terminal, app)?;
-                status_set = Some(Instant::now());
+                if !fetching {
+                    spawn_fetch(&tx, &host, &remote_log);
+                    fetching = true;
+                    app.status = format!("refreshing from {}…", app.host);
+                    status_set = Some(Instant::now());
+                }
             }
             _ => {}
         }
@@ -289,26 +360,5 @@ fn open_in_editor(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Res
     } else {
         format!("editor exited with {status}")
     };
-    Ok(())
-}
-
-/// Re-fetch from the server while keeping the current filter/selection sensible.
-fn refresh(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
-    let _ = View::Timeline; // view-agnostic: refresh works from any view
-    app.status = format!("refreshing from {}…", app.host);
-    terminal.draw(|f| ui::render(f, app))?;
-    match fetch_from_server(&app.host, &app.remote_log) {
-        Ok(data) => {
-            let items = model::parse_all(&data);
-            let n = items.len();
-            app.all = items;
-            app.recompute();
-            app.select_last();
-            app.status = format!("refreshed: {n} interactions");
-        }
-        Err(e) => {
-            app.status = format!("refresh failed: {e}");
-        }
-    }
     Ok(())
 }

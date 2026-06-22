@@ -63,6 +63,12 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
         Span::styled("│", Style::default().fg(DIM)),
         Span::raw(format!(" view:{view} ")),
         Span::styled("│", Style::default().fg(DIM)),
+        Span::raw(if app.refresh_secs > 0 {
+            format!(" auto:{}s ", app.refresh_secs)
+        } else {
+            " auto:off ".to_string()
+        }),
+        Span::styled("│", Style::default().fg(DIM)),
         Span::styled(" ? help ", Style::default().fg(DIM)),
     ];
     f.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -132,9 +138,9 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
     };
     let header = header.style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD));
     let title = if grouping {
-        " interactions — grouped (s to ungroup) "
+        " interactions — grouped, newest first (s to ungroup) "
     } else {
-        " interactions (↑/↓ j/k, g/G) "
+        " interactions — newest first (↑/↓ j/k, g/G) "
     };
     let table = Table::new(rows, widths)
         .header(header)
@@ -363,7 +369,7 @@ fn render_help(f: &mut Frame, area: Rect) {
         Line::styled("  oob-tui — keys", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
         Line::from(""),
         Line::raw("  ↑/↓  j/k   move selection"),
-        Line::raw("  g / G       first / last"),
+        Line::raw("  g / G       newest / oldest"),
         Line::raw("  J/K PgDn/Up scroll detail pane"),
         Line::raw("  /           edit text query"),
         Line::raw("  Enter       apply query (in edit)"),

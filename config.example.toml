@@ -24,3 +24,8 @@ remote_log = "/var/log/interactsh/interactions.jsonl"
 # Optional: editor opened by the `e` key. When unset, oob-tui uses $EDITOR and
 # then falls back to `nvim`. May include arguments, e.g. "code -w".
 # editor = "nvim"
+
+# Auto-refresh interval in seconds — the list re-fetches from the server this
+# often (in the background, so the UI never blocks). Set to 0 to disable and
+# refresh only on demand with the `r` key. Default 60. Ignored with --file/--cached.
+refresh_secs = 60

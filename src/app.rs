@@ -4,6 +4,8 @@
 
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
+
 use crate::model::Interaction;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -83,6 +85,8 @@ pub struct App {
     pub remote_log: String,
     /// Configured editor override; `None` falls back to $EDITOR then `nvim`.
     pub editor: Option<String>,
+    /// Auto-refresh interval in seconds (0 = disabled). Driven by the run loop.
+    pub refresh_secs: u64,
     pub all: Vec<Interaction>,
     /// Flat filtered indices (time-sorted) — used by the timeline (activity volume).
     pub filtered: Vec<usize>,
@@ -101,11 +105,18 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(host: String, remote_log: String, editor: Option<String>, all: Vec<Interaction>) -> Self {
+    pub fn new(
+        host: String,
+        remote_log: String,
+        editor: Option<String>,
+        refresh_secs: u64,
+        all: Vec<Interaction>,
+    ) -> Self {
         let mut app = App {
             host,
             remote_log,
             editor,
+            refresh_secs,
             all,
             filtered: Vec::new(),
             groups: Vec::new(),
@@ -121,11 +132,12 @@ impl App {
             should_quit: false,
         };
         app.recompute();
-        app.select_last(); // land on the most recent
+        app.select_first(); // land on the most recent (top of the list)
         app
     }
 
     /// Rebuild `filtered` and `groups` from `all` using filter + grouping state.
+    /// `groups` is ordered newest-first so the most recent activity sits at the top.
     pub fn recompute(&mut self) {
         let needle = self.query.to_lowercase();
         self.filtered = self
@@ -141,6 +153,10 @@ impl App {
         } else {
             self.filtered.iter().map(|&i| Group { indices: vec![i] }).collect()
         };
+        // Both branches build oldest-first (matching `filtered`); flip so the
+        // newest group/interaction is index 0 (top). `filtered` stays ascending
+        // for the timeline, which depends on first()=earliest, last()=latest.
+        self.groups.reverse();
 
         if self.selected >= self.groups.len() {
             self.selected = self.groups.len().saturating_sub(1);
@@ -148,8 +164,44 @@ impl App {
         self.detail_scroll = 0;
     }
 
-    /// Collapse `filtered` by group signature; order groups by last-seen (newest
-    /// activity at the bottom, matching the time-sorted list and `G`).
+    /// Replace all interactions with a freshly parsed set (used by refresh),
+    /// preserving the user's place: stay pinned to the top if already there,
+    /// otherwise re-select whatever interaction was selected before. Returns the
+    /// new interaction count.
+    pub fn reload(&mut self, data: &str) -> usize {
+        let was_top = self.selected == 0;
+        let key = self
+            .selected_interaction()
+            .map(|it| (it.timestamp, it.full_id.clone()));
+        self.all = crate::model::parse_all(data);
+        self.recompute();
+        self.restore_selection(was_top, key);
+        self.all.len()
+    }
+
+    fn restore_selection(&mut self, was_top: bool, key: Option<(DateTime<Utc>, String)>) {
+        if was_top || self.groups.is_empty() {
+            self.select_first();
+            return;
+        }
+        if let Some((ts, fid)) = key {
+            // The log is append-only, so the previously selected interaction still
+            // exists; find whichever group now holds it.
+            if let Some(gi) = self.groups.iter().position(|g| {
+                g.indices
+                    .iter()
+                    .any(|&i| self.all[i].timestamp == ts && self.all[i].full_id == fid)
+            }) {
+                self.selected = gi;
+                self.detail_scroll = 0;
+                return;
+            }
+        }
+        self.select_first();
+    }
+
+    /// Collapse `filtered` by group signature, ordered oldest-first here (the
+    /// caller reverses to newest-first).
     fn build_groups(&self) -> Vec<Group> {
         let mut by_sig: HashMap<String, usize> = HashMap::new();
         let mut groups: Vec<Group> = Vec::new();
@@ -209,6 +261,11 @@ impl App {
         self.recompute();
     }
 
+    #[cfg(test)]
+    fn rep_summary(&self) -> &str {
+        &self.selected_interaction().unwrap().summary
+    }
+
     pub fn toggle_view(&mut self) {
         self.view = match self.view {
             View::List => View::Timeline,
@@ -219,7 +276,7 @@ impl App {
     pub fn toggle_grouping(&mut self) {
         self.grouping = !self.grouping;
         self.recompute();
-        self.select_last();
+        self.select_first(); // newest is at the top
     }
 
     /// Render the current selection as a self-contained text document for `$EDITOR`.
@@ -275,5 +332,68 @@ impl App {
         out.push_str(rep.raw_response.replace('\r', "").trim_end());
         out.push('\n');
         Some(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::parse_all;
+
+    fn http(ts: &str, path: &str) -> String {
+        format!(
+            r#"{{"protocol":"http","full-id":"{path}","raw-request":"GET {path} HTTP/1.1\r\n\r\n","raw-response":"","remote-address":"1.1.1.1","timestamp":"{ts}"}}"#
+        )
+    }
+
+    fn app_from(lines: &[String]) -> App {
+        App::new("h".into(), "/x".into(), None, 0, parse_all(&lines.join("\n")))
+    }
+
+    #[test]
+    fn newest_is_first_and_selected_by_default() {
+        let app = app_from(&[
+            http("2026-06-20T10:00:00Z", "/old"),
+            http("2026-06-20T12:00:00Z", "/new"),
+        ]);
+        assert_eq!(app.groups.len(), 2);
+        assert_eq!(app.selected, 0, "selection defaults to the top");
+        assert_eq!(app.rep_summary(), "GET /new", "top row is newest");
+        assert_eq!(app.groups.last().unwrap().rep(&app.all).summary, "GET /old");
+    }
+
+    #[test]
+    fn reload_at_top_follows_the_newest() {
+        let mut app = app_from(&[http("2026-06-20T10:00:00Z", "/a")]);
+        assert_eq!(app.selected, 0);
+        let data = [
+            http("2026-06-20T10:00:00Z", "/a"),
+            http("2026-06-20T11:00:00Z", "/b"),
+        ]
+        .join("\n");
+        app.reload(&data);
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.rep_summary(), "GET /b", "stays pinned to newest at top");
+    }
+
+    #[test]
+    fn reload_preserves_a_non_top_selection() {
+        let mut app = app_from(&[
+            http("2026-06-20T10:00:00Z", "/a"), // oldest -> bottom
+            http("2026-06-20T11:00:00Z", "/b"),
+            http("2026-06-20T12:00:00Z", "/c"), // newest -> top
+        ]);
+        app.select_last(); // select the oldest, /a
+        assert_eq!(app.rep_summary(), "GET /a");
+        let data = [
+            http("2026-06-20T10:00:00Z", "/a"),
+            http("2026-06-20T11:00:00Z", "/b"),
+            http("2026-06-20T12:00:00Z", "/c"),
+            http("2026-06-20T13:00:00Z", "/d"), // brand-new newest
+        ]
+        .join("\n");
+        app.reload(&data);
+        assert_eq!(app.rep_summary(), "GET /a", "selection follows the interaction");
+        assert_ne!(app.selected, 0, "not yanked back to the top");
     }
 }

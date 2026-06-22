@@ -26,6 +26,7 @@ $EDITOR config.toml                     # set host = "your-ssh-alias"
 | `host` | *(none)* | ssh host alias (an entry in `~/.ssh/config`, key auth) to pull the log from |
 | `remote_log` | `/var/log/interactsh/interactions.jsonl` | path to interactsh's log on that host |
 | `editor` | `$EDITOR`, then `nvim` | editor opened by the `e` key |
+| `refresh_secs` | `60` | auto-refresh interval in seconds; `0` disables (refresh on demand with `r`) |
 
 Lookup order (first found wins): `--config <path>` → `./config.toml` →
 `~/.config/oob-tui/config.toml` → built-in defaults. CLI flags override the file.
@@ -79,8 +80,9 @@ the editor is open and restores on exit. Set `EDITOR` to override (e.g.
 
 ## Views
 
-- **List** — left: time / protocol / source IP / summary, sorted oldest→newest.
-  Right: the full raw request and response of the selected interaction.
+- **List** — left: time / protocol / source IP / summary, **newest first** (most
+  recent at the top; `g` jumps to newest, `G` to oldest). Right: the full raw
+  request and response of the selected interaction.
 - **Timeline** — a unicode histogram of the (filtered) interactions across their
   full time range, with totals, per-protocol counts, bucket width, and the newest
   interactions listed below.
@@ -88,6 +90,15 @@ the editor is open and restores on exit. Set `EDITOR` to override (e.g.
 The query and protocol filter apply to **both** views, so the timeline reflects
 exactly what you've filtered to (e.g. query an attacker IP, switch to timeline,
 see when they hit).
+
+## Auto-refresh
+
+By default the list re-fetches from the server every 60 seconds (`refresh_secs`),
+so it works as a live monitor. The fetch runs on a background thread — the UI never
+blocks — and your place is preserved: if you're at the top you stay pinned to the
+newest interaction as new ones arrive; if you've scrolled into history, your
+selection stays on the same interaction. The header shows `auto:60s` (or `auto:off`).
+Press `r` to refresh immediately; set `refresh_secs = 0` to disable.
 
 ## License
 

@@ -20,6 +20,8 @@ pub struct Config {
     pub remote_log: String,
     /// Editor for the `e` key; falls back to $EDITOR then `nvim` when unset.
     pub editor: Option<String>,
+    /// Auto-refresh interval in seconds. 0 disables it. Default 60.
+    pub refresh_secs: u64,
 }
 
 impl Default for Config {
@@ -28,6 +30,7 @@ impl Default for Config {
             host: String::new(),
             remote_log: "/var/log/interactsh/interactions.jsonl".into(),
             editor: None,
+            refresh_secs: 60,
         }
     }
 }
@@ -72,20 +75,30 @@ mod tests {
 
     #[test]
     fn partial_config_keeps_defaults() {
-        // Only `host` set: remote_log falls back to the default, editor stays None.
+        // Only `host` set: other fields fall back to their defaults.
         let cfg: Config = toml::from_str(r#"host = "oob""#).unwrap();
         assert_eq!(cfg.host, "oob");
         assert_eq!(cfg.remote_log, "/var/log/interactsh/interactions.jsonl");
         assert!(cfg.editor.is_none());
+        assert_eq!(cfg.refresh_secs, 60);
     }
 
     #[test]
     fn all_fields_parse() {
-        let cfg: Config =
-            toml::from_str("host='h'\nremote_log='/x.jsonl'\neditor='code -w'").unwrap();
+        let cfg: Config = toml::from_str(
+            "host='h'\nremote_log='/x.jsonl'\neditor='code -w'\nrefresh_secs=10",
+        )
+        .unwrap();
         assert_eq!(cfg.host, "h");
         assert_eq!(cfg.remote_log, "/x.jsonl");
         assert_eq!(cfg.editor.as_deref(), Some("code -w"));
+        assert_eq!(cfg.refresh_secs, 10);
+    }
+
+    #[test]
+    fn refresh_can_be_disabled() {
+        let cfg: Config = toml::from_str("refresh_secs = 0").unwrap();
+        assert_eq!(cfg.refresh_secs, 0);
     }
 
     #[test]
