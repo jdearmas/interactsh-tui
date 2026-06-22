@@ -3,6 +3,7 @@ name = "oob-tui"
 version = "0.1.0"
 edition = "2021"
 description = "TUI to browse, query, and timeline interactsh OOB-server interactions"
+license = "MIT"
 
 [dependencies]
 ratatui = "0.29"

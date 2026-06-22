@@ -88,3 +88,7 @@ the editor is open and restores on exit. Set `EDITOR` to override (e.g.
 The query and protocol filter apply to **both** views, so the timeline reflects
 exactly what you've filtered to (e.g. query an attacker IP, switch to timeline,
 see when they hit).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
