@@ -8,6 +8,25 @@ every JSONL record, and gives you a sortable timeline, a free-text query box, a
 protocol filter, a full request/response detail pane (never truncated), and a
 timeline histogram.
 
+## Demo / screenshot
+
+A self-contained sample (no real hosts — `oob.example.com` + reserved
+documentation IP ranges) is included for screenshots and a quick look:
+
+```
+cargo run --release -- --file examples/sample-interactions.jsonl
+```
+
+It loads 25 fabricated interactions — blind XSS exfil, SSRF, Log4Shell DNS,
+sqlmap/Nuclei scanner noise, DNS TXT data-exfil, an SMTP probe — spread over a
+day so the list, grouping (`s`), and timeline (`t`) all have something to show.
+The data is deterministic; regenerate it with
+`python3 examples/gen-sample-data.py > examples/sample-interactions.jsonl`.
+
+> A ~128×40 terminal frames the two-pane layout well. The default view (newest at
+> top, hero detail on the right) makes the best hero shot; press `s` for grouping,
+> `t` for the timeline.
+
 ## Configure
 
 Connection settings live in a config file, not in the source. Copy the template
