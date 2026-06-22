@@ -1,0 +1,5 @@
+/target
+
+# Personal configuration — keep deployment specifics out of the public repo.
+# Others copy config.example.toml -> config.toml (committed template stays tracked).
+/config.toml

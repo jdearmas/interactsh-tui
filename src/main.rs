@@ -1,0 +1,314 @@
+//! oob-tui — browse, query, and timeline interactsh OOB-server interactions.
+//!
+//! Connection settings (ssh host, remote log path, editor) live in a config file
+//! — see `config.example.toml`. CLI flags override the config:
+//!   oob-tui                 # fetch from the configured host over ssh (gzip)
+//!   oob-tui --host myalias  # override the ssh host alias
+//!   oob-tui --config p.toml # use a specific config file
+//!   oob-tui --file log.jsonl  # read a local jsonl file instead of ssh
+//!   oob-tui --cached        # use the last cached fetch, no ssh
+
+mod app;
+mod config;
+mod model;
+mod ui;
+
+use std::io::Read;
+use std::path::PathBuf;
+use std::process::Command;
+use std::time::{Duration, Instant};
+
+use anyhow::{bail, Context, Result};
+use flate2::read::GzDecoder;
+use ratatui::crossterm::{
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+
+use app::{App, Mode, View};
+use config::Config;
+
+struct Args {
+    host: Option<String>,
+    file: Option<PathBuf>,
+    cached: bool,
+    config: Option<PathBuf>,
+}
+
+fn parse_args() -> Result<Args> {
+    let mut host = None;
+    let mut file = None;
+    let mut cached = false;
+    let mut config = None;
+    let mut it = std::env::args().skip(1);
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--host" => host = Some(it.next().context("--host needs a value")?),
+            "--file" => file = Some(PathBuf::from(it.next().context("--file needs a value")?)),
+            "--config" => config = Some(PathBuf::from(it.next().context("--config needs a value")?)),
+            "--cached" => cached = true,
+            "-h" | "--help" => {
+                println!(
+                    "oob-tui — interactsh OOB interaction browser\n\n\
+                     Settings come from config.toml (see config.example.toml).\n\n\
+                     --host <alias>   ssh host alias (overrides config)\n\
+                     --config <path>  use a specific config file\n\
+                     --file <path>    read a local jsonl file instead of ssh\n\
+                     --cached         reuse the last fetch (no ssh)\n\
+                     -h, --help       this help"
+                );
+                std::process::exit(0);
+            }
+            other => bail!("unknown argument: {other}"),
+        }
+    }
+    Ok(Args { host, file, cached, config })
+}
+
+fn cache_path() -> PathBuf {
+    let base = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    PathBuf::from(base).join(".cache/oob-tui/interactions.jsonl")
+}
+
+/// Pull the log from the server over ssh, decompressing the gzip stream.
+fn fetch_from_server(host: &str, remote_log: &str) -> Result<String> {
+    if host.trim().is_empty() {
+        bail!(
+            "no ssh host configured. Copy config.example.toml to config.toml and set \
+             `host`, or pass --host <alias> (or --file <path> for a local log)."
+        );
+    }
+    let out = Command::new("ssh")
+        .arg(host)
+        .arg(format!("gzip -c {remote_log}"))
+        .output()
+        .context("failed to spawn ssh")?;
+    if !out.status.success() {
+        bail!(
+            "ssh {host} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let mut s = String::new();
+    GzDecoder::new(&out.stdout[..])
+        .read_to_string(&mut s)
+        .context("failed to gunzip remote log")?;
+    // Best-effort cache so --cached works offline next time.
+    let p = cache_path();
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(&p, &s);
+    Ok(s)
+}
+
+fn load_data(args: &Args, host: &str, remote_log: &str) -> Result<String> {
+    if let Some(f) = &args.file {
+        return std::fs::read_to_string(f).with_context(|| format!("reading {}", f.display()));
+    }
+    if args.cached {
+        let p = cache_path();
+        return std::fs::read_to_string(&p)
+            .with_context(|| format!("no cache at {} (run once without --cached)", p.display()));
+    }
+    fetch_from_server(host, remote_log)
+}
+
+fn main() -> Result<()> {
+    let args = parse_args()?;
+    let (cfg, cfg_path) = Config::load(args.config.as_deref())?;
+    // CLI --host overrides the configured host.
+    let host = args.host.clone().unwrap_or_else(|| cfg.host.clone());
+
+    if let Some(p) = &cfg_path {
+        eprintln!("config: {}", p.display());
+    } else if args.file.is_none() && !args.cached {
+        eprintln!("config: none found — using defaults (see config.example.toml)");
+    }
+    eprintln!("loading interactions…");
+    let data = load_data(&args, &host, &cfg.remote_log)?;
+    let interactions = model::parse_all(&data);
+    if interactions.is_empty() {
+        eprintln!("warning: no interactions parsed");
+    }
+
+    let mut app = App::new(host, cfg.remote_log.clone(), cfg.editor.clone(), interactions);
+    let mut terminal = ratatui::init();
+    let res = run(&mut terminal, &mut app);
+    ratatui::restore();
+    res
+}
+
+fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
+    // Auto-clear a transient status message after a moment.
+    let mut status_set: Option<Instant> = None;
+    let mut dirty = true; // redraw only when state changed, not on a fixed clock
+    loop {
+        if dirty {
+            terminal.draw(|f| ui::render(f, app))?;
+            dirty = false;
+        }
+
+        // Wake periodically only so the transient status line can self-clear.
+        if !event::poll(Duration::from_millis(250))? {
+            if let Some(t) = status_set {
+                if t.elapsed() > Duration::from_secs(4) {
+                    app.status.clear();
+                    status_set = None;
+                    dirty = true;
+                }
+            }
+            continue;
+        }
+
+        let ev = event::read()?;
+        if matches!(ev, Event::Resize(_, _)) {
+            dirty = true;
+            continue;
+        }
+        let Event::Key(key) = ev else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        // Any handled key produces a redraw.
+        dirty = true;
+
+        // Help overlay: any key closes it.
+        if app.show_help {
+            app.show_help = false;
+            continue;
+        }
+
+        if app.mode == Mode::Editing {
+            match key.code {
+                KeyCode::Esc => {
+                    app.mode = Mode::Normal;
+                }
+                KeyCode::Enter => {
+                    app.mode = Mode::Normal;
+                    app.recompute();
+                    app.select_last();
+                }
+                KeyCode::Backspace => {
+                    app.query.pop();
+                    app.recompute();
+                }
+                KeyCode::Char(c) => {
+                    app.query.push(c);
+                    app.recompute();
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        // Normal mode.
+        match key.code {
+            KeyCode::Char('q') => app.should_quit = true,
+            KeyCode::Esc => app.should_quit = true,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.should_quit = true
+            }
+            KeyCode::Char('?') => app.show_help = true,
+            KeyCode::Char('/') => {
+                app.mode = Mode::Editing;
+                app.status.clear();
+            }
+            KeyCode::Char('p') => app.cycle_proto(),
+            KeyCode::Char('s') => app.toggle_grouping(),
+            KeyCode::Char('e') => {
+                if let Err(e) = open_in_editor(terminal, app) {
+                    app.status = format!("editor failed: {e}");
+                }
+                status_set = Some(Instant::now());
+            }
+            KeyCode::Char('t') => app.toggle_view(),
+            KeyCode::Char('j') | KeyCode::Down => app.move_selection(1),
+            KeyCode::Char('k') | KeyCode::Up => app.move_selection(-1),
+            KeyCode::Char('g') | KeyCode::Home => app.select_first(),
+            KeyCode::Char('G') | KeyCode::End => app.select_last(),
+            KeyCode::Char('J') | KeyCode::PageDown => app.scroll_detail(5),
+            KeyCode::Char('K') | KeyCode::PageUp => app.scroll_detail(-5),
+            KeyCode::Char('r') => {
+                refresh(terminal, app)?;
+                status_set = Some(Instant::now());
+            }
+            _ => {}
+        }
+
+        if app.should_quit {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Write the selected interaction (or whole group) to a temp file and open it in
+/// `$EDITOR` (default `nvim`), suspending the TUI for the duration.
+fn open_in_editor(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
+    let Some(text) = app.export_selected() else {
+        app.status = "nothing selected to open".into();
+        return Ok(());
+    };
+    let it = app.selected_interaction().expect("selection exists");
+    let stamp = it.timestamp.format("%Y%m%dT%H%M%S");
+    let path = std::env::temp_dir().join(format!("oob-{}-{}.txt", it.protocol, stamp));
+    std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
+
+    // Editor precedence: config `editor` > $EDITOR > nvim. The value may carry
+    // args (e.g. "code -w"): program = first token, rest precede the path.
+    let editor = app
+        .editor
+        .clone()
+        .or_else(|| std::env::var("EDITOR").ok())
+        .unwrap_or_else(|| "nvim".into());
+    let mut parts = editor.split_whitespace();
+    let prog = parts.next().unwrap_or("nvim");
+
+    // Drop out of the TUI so the editor owns the real terminal.
+    disable_raw_mode()?;
+    execute!(std::io::stdout(), LeaveAlternateScreen)?;
+
+    let status = Command::new(prog)
+        .args(parts)
+        .arg(&path)
+        .status()
+        .with_context(|| format!("launching editor '{prog}'"));
+
+    // Restore the TUI regardless of how the editor exited.
+    enable_raw_mode()?;
+    execute!(std::io::stdout(), EnterAlternateScreen)?;
+    terminal.clear()?;
+
+    let status = status?;
+    app.status = if status.success() {
+        format!("opened {}", path.display())
+    } else {
+        format!("editor exited with {status}")
+    };
+    Ok(())
+}
+
+/// Re-fetch from the server while keeping the current filter/selection sensible.
+fn refresh(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
+    let _ = View::Timeline; // view-agnostic: refresh works from any view
+    app.status = format!("refreshing from {}…", app.host);
+    terminal.draw(|f| ui::render(f, app))?;
+    match fetch_from_server(&app.host, &app.remote_log) {
+        Ok(data) => {
+            let items = model::parse_all(&data);
+            let n = items.len();
+            app.all = items;
+            app.recompute();
+            app.select_last();
+            app.status = format!("refreshed: {n} interactions");
+        }
+        Err(e) => {
+            app.status = format!("refresh failed: {e}");
+        }
+    }
+    Ok(())
+}

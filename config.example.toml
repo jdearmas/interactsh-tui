@@ -1,0 +1,26 @@
+# oob-tui configuration — copy this file to `config.toml` and edit it.
+#
+#   cp config.example.toml config.toml
+#
+# `config.toml` is gitignored, so your settings stay out of the repo.
+# CLI flags (--host, --file, --config) override anything set here.
+
+# ssh host alias to pull the interactions log from. This should be an entry in
+# your ~/.ssh/config that authenticates with a key (no password prompt), e.g.:
+#
+#   Host my-oob
+#       HostName 203.0.113.10
+#       User root
+#       IdentityFile ~/.ssh/id_ed25519
+#
+# Required unless you always pass --host, or run against a local --file.
+host = "my-oob"
+
+# Absolute path to interactsh's interactions.jsonl on that host. This is where
+# the interactsh notifier appends every interaction. The default below is the
+# usual location; change it only if you log somewhere else.
+remote_log = "/var/log/interactsh/interactions.jsonl"
+
+# Optional: editor opened by the `e` key. When unset, oob-tui uses $EDITOR and
+# then falls back to `nvim`. May include arguments, e.g. "code -w".
+# editor = "nvim"
